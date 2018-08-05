@@ -1,0 +1,17 @@
+* Implement Python classes for PyNN backend
+
+** Implement recipe
+
+- [ ] check whether all recipe's methods/properties  must be callable at moment
+      that recipe is initialized (=__init__()= called)
+
+    - if no: can use recipe itself as singleton class where all =Population=
+      objects are registered
+
+    - if yes: must use wrapper Singleton class that creates a =recipe= on the fly
+      after all Populations and Projections have been defined.
+
+* Implement C++ classes for PyNN backend
+
+Implement all standardmodels and make sure they can be instantiated in Python.
+If needed, create extra PyBind11 C++ classes that facilitate this.
