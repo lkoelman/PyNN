@@ -1,6 +1,6 @@
 # encoding: utf-8
 """
-nrnpython implementation of the PyNN API.
+Arbor implementation of the PyNN API.
 
 :copyright: Copyright 2006-2016 by the PyNN team, see AUTHORS.
 :license: CeCILL, see LICENSE for details.
@@ -88,7 +88,7 @@ class Population(common.Population, PopulationMixin):
         __doc__ = common.Population.__doc__
         common.Population.__init__(self, size, cellclass, cellparams,
                                    structure, initial_values, label)
-        simulator.initializer.register(self)
+        simulator.model_factory.register(self)
 
     def _get_view(self, selector, label=None):
         return PopulationView(self, selector, label)

@@ -40,7 +40,7 @@ name = "ARBOR"  # for use in annotating output data
 _MIN_PROJECTION_VARGID = 1000000
 
 
-class _Recipe(arb.recipe):
+class _ArborRecipe(arb.recipe):
     """
     Map PyNN model description to Arbor model description.
     
@@ -48,30 +48,48 @@ class _Recipe(arb.recipe):
     PyNN data structures and return them in Arbor format.
     """
 
-    def __init__(self, TODO):
+    def __init__(self, populations, projections):
         # TODO: pass in Populations, Projections or equivalent data structures
         pass
 
     def num_cells(self):
+        """
+        @override   arb::recipe::num_cells
+        """
         pass
 
     def cell_description(self, gid):
+        """
+        @override   arb::recipe::cell_description
+        """
         # TODO: cell description should be created by the standardcelltype class
         pass
 
     def num_sources(self, gid):
+        """
+        @override   arb::recipe::num_sources
+        """
         pass
 
     def num_targets(self, gid):
+        """
+        @override   arb::recipe::num_targets
+        """
         pass
 
     def kind(self, gid):
+        """
+        @override   arb::recipe::kind
+        """
         # TODO: look up gid in Populations and map to kind/celltype
+        #   - Q: how is the gid-cell correspondence determined by Arbor?
         pass
 
     def connections_on(self, gid):
         """
         Return connections on cell with given gid.
+        
+        @override   arb::recipe::conections_on
 
         Returns:
             list of `arb.connection` objects describing each connection
@@ -80,7 +98,7 @@ class _Recipe(arb.recipe):
         pass
 
 
-class _ModelFactory(object):
+class _ArborModelFactory(object):
     """
     Singleton class that keeps track of all PyNN populations and projections
     and creates a corresponding Arbor recipe and Arbor model.
@@ -93,6 +111,7 @@ class _ModelFactory(object):
     def clear(self):
         self.population_list = []
         self.cell_list = []
+        self.projection_list = []
 
 
     def register(self, *items):
@@ -104,6 +123,8 @@ class _ModelFactory(object):
             if isinstance(item, (common.BasePopulation, common.Assembly)):
                 if item.celltype.injectable:  # don't do memb_init() on spike sources
                     self.population_list.append(item)
+            elif isinstance(item, common.Projection):
+                self.projection_list.append(item)
             else:
                 if hasattr(item._cell, "memb_init"):
                     self.cell_list.append(item)
@@ -113,7 +134,7 @@ class _ModelFactory(object):
         """
         Finalize recipe before building a runnable model/simulation.
         """
-        recipe = _Recipe(TODO) # TODO: build recipe from Populations, Projections, Connections
+        recipe = _ArborRecipe(self.population_list, self.projection_list) # TODO: build recipe from Populations, Projections, Connections
         decomp = arb.partition_load_balance(recipe)
         model = arb.model(recipe, decomp)
         return model
@@ -162,7 +183,7 @@ class _State(common.control.BaseState):
 
 # --- Initialization, and module attributes ------------------------------------
 
-model_factory = _ModelFactory()
+model_factory = _ArborModelFactory()
 state = _State(model_factory)
-del _ModelFactory
+del _ArborModelFactory
 del _State
