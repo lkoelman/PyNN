@@ -49,21 +49,26 @@ class _ArborRecipe(arb.recipe):
     """
 
     def __init__(self, populations, projections):
-        # TODO: pass in Populations, Projections or equivalent data structures
-        pass
+        self.populations = populations
+        self.projections = projections
+
 
     def num_cells(self):
         """
         @override   arb::recipe::num_cells
         """
-        pass
+        return sum((pop.size for pop in self.populations))
+
 
     def cell_description(self, gid):
         """
         @override   arb::recipe::cell_description
         """
-        # TODO: cell description should be created by the standardcelltype class
-        pass
+        for pop in self.populations:
+            if gid in pop.all_cells:
+                return pop.celltype.model # model serves as description
+        raise ValueError("Cell GID {} not found in any Population.".format(gid))
+
 
     def num_sources(self, gid):
         """
@@ -71,11 +76,13 @@ class _ArborRecipe(arb.recipe):
         """
         pass
 
+
     def num_targets(self, gid):
         """
         @override   arb::recipe::num_targets
         """
         pass
+
 
     def kind(self, gid):
         """
@@ -83,7 +90,11 @@ class _ArborRecipe(arb.recipe):
         """
         # TODO: look up gid in Populations and map to kind/celltype
         #   - Q: how is the gid-cell correspondence determined by Arbor?
-        pass
+        for pop in self.populations:
+            if gid in pop.all_cells:
+                return pop.celltype.arb_cell_kind
+        raise ValueError("Cell GID {} not found in any Population.".format(gid))
+
 
     def connections_on(self, gid):
         """
@@ -118,6 +129,12 @@ class _ArborModelFactory(object):
         """
         Add items to the list of cells/populations to be initialized. Cell
         objects must have a `memb_init()` method.
+
+        Parameters
+        ----------
+
+        items : *list
+            Population or Projection objects
         """
         for item in items:
             if isinstance(item, (common.BasePopulation, common.Assembly)):
@@ -158,28 +175,29 @@ class _State(common.control.BaseState):
         """
         Finalize the recipe.
         """
-        model = model_factory.build_model()
+        self.model = model_factory.build_model()
         recorder = arb.make_spike_recorder(model)
-        model.run(500, 0.025)
+        
 
 
     def run(self, simtime):
         """
         Advance the simulation for a certain time (quantity).
         """
-        self.run_until(self.tstop + simtime)
+        self.model.run(500, 0.025)
+        # self.run_until(self.tstop + simtime)
 
 
-    def run_until(self, tstop):
-        """
-        Advance the simulation until certain time (point in time).
-        """
-        self._update_current_sources(tstop)
-        self._pre_run()
-        self.tstop = tstop
-        #logger.info("Running the simulation until %g ms" % tstop)
-        if self.tstop > self.t:
-            self.parallel_context.psolve(self.tstop)
+    # def run_until(self, tstop):
+    #     """
+    #     Advance the simulation until certain time (point in time).
+    #     """
+    #     self._update_current_sources(tstop)
+    #     self._pre_run()
+    #     self.tstop = tstop
+    #     #logger.info("Running the simulation until %g ms" % tstop)
+    #     if self.tstop > self.t:
+    #         self.parallel_context.psolve(self.tstop)
 
 # --- Initialization, and module attributes ------------------------------------
 
