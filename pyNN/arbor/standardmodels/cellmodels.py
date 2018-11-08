@@ -76,6 +76,10 @@ def _new_property(obj_hierarchy, attr_name):
 # TODO: implement multi-compartmental neurons.
 #       - see PyNN MC feature branch for implementation ideas
 #       - combine with existing Ephys-based codebase
+#       - Morphologies in Arbor:
+#           + see example https://github.com/eth-cscs/arbor/blob/master/example/miniapp/miniapp_recipes.cpp
+
+# NOTE: in arbor master branch 'cell' has become 'mc_cell'
 
 class BaseCompartmentalNeuron(arb.cell):
     """docstring"""
@@ -89,7 +93,7 @@ class BaseCompartmentalNeuron(arb.cell):
 
         # TODO: find out how to set all passive properties
 
-        self.source_section = self.seg # TODO: source section necessary?
+        self.source_section = self.seg # TODO: source section only necessary for NEURON backend?
 
         # TODO: insert current source
 
@@ -120,6 +124,7 @@ class SingleCompartmentNeuron(arb.cell):
 
 
 class MultiCompartmentNeuron(arb.cell):
+    # see include/arbor/mc_cell.hpp
     pass
 
 ################################################################################
