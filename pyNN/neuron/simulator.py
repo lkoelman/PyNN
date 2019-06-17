@@ -321,10 +321,26 @@ class ID(int, common.IDMixin):
                              initialise the cell model.
         """
         gid = int(self)
-        self._cell = cell_model(**cell_parameters)          # create the cell object
-        state.register_gid(gid, self._cell.source, section=self._cell.source_section)
-        if hasattr(self._cell, "get_threshold"):            # this is not adequate, since the threshold may be changed after cell creation
-            state.parallel_context.threshold(int(self), self._cell.get_threshold())  # the problem is that self._cell does not know its own gid
+        if getattr(cell_model, 'multicompartment', False):
+            # registration of multicompartmental cell
+            cell_parameters['owning_gid'] = gid
+            self._cell = cell_model(**cell_parameters)
+
+            # register gid for each source section
+            for region, source_gid in self._cell.region_to_gid.items():
+                source_ref = self._cell.gid_to_source[source_gid]
+                source_sec = self._cell.gid_to_section[source_gid]
+                state.register_gid(source_gid, source_ref, section=source_sec)
+                # Threshold is region-dependent
+                state.parallel_context.threshold(source_gid, self._cell.get_threshold(region))
+
+        else:
+            # default cell registration
+            self._cell = cell_model(**cell_parameters)          # create the cell object
+            state.register_gid(gid, self._cell.source, section=self._cell.source_section)
+        
+            if hasattr(self._cell, "get_threshold"):            # this is not adequate, since the threshold may be changed after cell creation
+                state.parallel_context.threshold(gid, self._cell.get_threshold())  # the problem is that self._cell does not know its own gid
 
     def get_initial_value(self, variable):
         """Get the initial value of a state variable of the cell."""
