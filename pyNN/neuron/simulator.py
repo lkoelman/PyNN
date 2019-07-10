@@ -32,12 +32,26 @@ import os.path
 from neuron import h, nrn_dll_loaded
 from operator import itemgetter
 
+from mpi4py import MPI
+comm = MPI.COMM_WORLD
+
 logger = logging.getLogger("PyNN")
 name = "NEURON"  # for use in annotating output data
 
 # Instead of starting the projection var-GID range from 0, the first _MIN_PROJECTION_VARGID are 
 # reserved for other potential uses
-_MIN_PROJECTION_VARGID = 1000000 
+_MIN_PROJECTION_VARGID = 1000000    # 1e6
+
+# Multicompartment cell support: one PyNN cell model can have multiple gids associated
+# with it. Each subcellular region is mapped to the base gid plus an offset.
+_MIN_MULTICOMP_SPKGID = int(1e9)    # lower bound for subcellular region GIDs
+_NUM_MULTICOMP_SPKGID = 1000        # per cell
+
+# Offset inside subcellular gid range
+# subcellular_gid_offsets = {
+#     # "soma": 0, # soma not mapped to upper range but is equal to parent gid
+#     "axon_terminal": 1,
+# }
 
 # --- Internal NEURON functionality --------------------------------------------
 
@@ -192,8 +206,84 @@ class _State(common.control.BaseState):
             return h.min_delay
     min_delay = property(fset=__set_min_delay, fget=__get_min_delay)
 
+
+    def clear(self):
+        self.parallel_context.gid_clear()
+        self.gid_sources = []
+        self.recorders = set([])
+        self.current_sources = []
+        self.gid_counter = 0
+        self.vargid_offsets = dict()  # Contains the start of the available "variable"-GID range for each projection (as opposed to "cell"-GIDs)
+        self.cell_spkgid_offsets = dict()
+        self.cell_spkgid_values = dict()
+        h.plastic_connections = []
+        self.segment_counter = -1
+        self.reset()
+
+
+    def reset(self):
+        """Reset the state of the current network to time t = 0."""
+        self.running = False
+        self.t = 0
+        self.tstop = 0
+        self.t_start = 0
+        self.segment_counter += 1
+        h.finitialize()
+
+
+    def _pre_run(self):
+        if not self.running:
+            self.running = True
+            local_minimum_delay = self.parallel_context.set_maxstep(self.default_maxstep)
+            if state.vargid_offsets:
+                logger.info("Setting up transfer on MPI process {}".format(state.mpi_rank))
+                state.parallel_context.setup_transfer()
+            h.finitialize()
+            self.tstop = 0
+            logger.debug("default_maxstep on host #%d = %g" % (self.mpi_rank, self.default_maxstep))
+            logger.debug("local_minimum_delay on host #%d = %g" % (self.mpi_rank, local_minimum_delay))
+            logger.debug("Subcellular region spkgids are: {}".format(self.cell_spkgid_values))
+            if self.min_delay == 'auto':
+                self.min_delay = local_minimum_delay
+            else:
+                if self.num_processes > 1:
+                    assert local_minimum_delay >= self.min_delay, \
+                       "There are connections with delays (%g) shorter than the minimum delay (%g)" % (local_minimum_delay, self.min_delay)
+
+
+    def _update_current_sources(self, tstop):
+        for source in self.current_sources:
+            for iclamp in source._devices:
+                source._update_iclamp(iclamp, tstop)
+
+
+    def run(self, simtime):
+        """Advance the simulation for a certain time."""
+        self.run_until(self.tstop + simtime)
+
+
+    def run_until(self, tstop):
+        self._update_current_sources(tstop)
+        self._pre_run()
+        self.tstop = tstop
+        #logger.info("Running the simulation until %g ms" % tstop)
+        if self.tstop > self.t:
+            self.parallel_context.psolve(self.tstop)
+
+
+    def finalize(self, quit=False):
+        """Finish using NEURON."""
+        self.parallel_context.runworker()
+        self.parallel_context.done()
+        if quit:
+            logger.info("Finishing up with NEURON.")
+            h.quit()
+
+
     def register_gid(self, gid, source, section=None):
-        """Register a global ID with the global `ParallelContext` instance."""
+        """
+        Register a global ID with the global `ParallelContext` instance.
+        """
         ###print("registering gid %s to %s (section=%s)" % (gid, source, section))
         self.parallel_context.set_gid2node(gid, self.mpi_rank)  # assign the gid to this node
         if is_point_process(source):
@@ -209,68 +299,6 @@ class _State(common.control.BaseState):
                                         # be able to unregister a gid and have a __del__
                                         # method in ID, but this will do for now.
 
-    def clear(self):
-        self.parallel_context.gid_clear()
-        self.gid_sources = []
-        self.recorders = set([])
-        self.current_sources = []
-        self.gid_counter = 0
-        self.vargid_offsets = dict()  # Contains the start of the available "variable"-GID range for each projection (as opposed to "cell"-GIDs)
-        h.plastic_connections = []
-        self.segment_counter = -1
-        self.reset()
-
-    def reset(self):
-        """Reset the state of the current network to time t = 0."""
-        self.running = False
-        self.t = 0
-        self.tstop = 0
-        self.t_start = 0
-        self.segment_counter += 1
-        h.finitialize()
-
-    def _pre_run(self):
-        if not self.running:
-            self.running = True
-            local_minimum_delay = self.parallel_context.set_maxstep(self.default_maxstep)
-            if state.vargid_offsets:
-                logger.info("Setting up transfer on MPI process {}".format(state.mpi_rank))
-                state.parallel_context.setup_transfer()
-            h.finitialize()
-            self.tstop = 0
-            logger.debug("default_maxstep on host #%d = %g" % (self.mpi_rank, self.default_maxstep))
-            logger.debug("local_minimum_delay on host #%d = %g" % (self.mpi_rank, local_minimum_delay))
-            if self.min_delay == 'auto':
-                self.min_delay = local_minimum_delay
-            else:
-                if self.num_processes > 1:
-                    assert local_minimum_delay >= self.min_delay, \
-                       "There are connections with delays (%g) shorter than the minimum delay (%g)" % (local_minimum_delay, self.min_delay)
-
-    def _update_current_sources(self, tstop):
-        for source in self.current_sources:
-            for iclamp in source._devices:
-                source._update_iclamp(iclamp, tstop)
-
-    def run(self, simtime):
-        """Advance the simulation for a certain time."""
-        self.run_until(self.tstop + simtime)
-
-    def run_until(self, tstop):
-        self._update_current_sources(tstop)
-        self._pre_run()
-        self.tstop = tstop
-        #logger.info("Running the simulation until %g ms" % tstop)
-        if self.tstop > self.t:
-            self.parallel_context.psolve(self.tstop)
-
-    def finalize(self, quit=False):
-        """Finish using NEURON."""
-        self.parallel_context.runworker()
-        self.parallel_context.done()
-        if quit:
-            logger.info("Finishing up with NEURON.")
-            h.quit()
 
     def get_vargids(self, projection, pre_idx, post_idx):
         """
@@ -298,6 +326,55 @@ class _State(common.control.BaseState):
         post_pre_vargid = pre_post_vargid + 1
         return (pre_post_vargid, post_pre_vargid)
 
+
+    def make_spkgids(self, cell_gid, region_ids):
+        """
+        Get new "subcellular region"-GIDs (as opposed to the "cell"-GIDs) 
+        for spike detection on subcellular regions of multicompartment cells.
+        """
+        # Simple method: only one subcellular source per region
+        # cell_offset = _MIN_MULTICOMP_SPKGID + (cell_gid * _NUM_MULTICOMP_SPKGID)
+        # return cell_offset + subcellular_gid_offsets[region_id]
+
+        # Method for many subcellular spike sources:
+        default_offset = _MIN_MULTICOMP_SPKGID + (cell_gid * _NUM_MULTICOMP_SPKGID)
+        old_offset = self.cell_spkgid_offsets.setdefault(cell_gid, default_offset)
+        new_offset = old_offset + len(region_ids)
+        self.cell_spkgid_offsets[cell_gid] = new_offset
+        new_gids = range(old_offset, new_offset)
+
+        # Save the new gids
+        region_to_gid = dict(zip(region_ids, new_gids))
+        self.cell_spkgid_values.setdefault(cell_gid, {}).update(region_to_gid)
+        return region_to_gid
+
+
+    def synchronize_gid_data(self):
+        """
+        Synchronize subcellular GID information between MPI ranks.
+
+        NOTE: called by our custom Population object after creation
+        """
+        all_spkgid_values = comm.allgather(self.cell_spkgid_values)
+        for spkgid_values in all_spkgid_values:
+            self.cell_spkgid_values.update(spkgid_values)
+
+
+    def query_spkgid(self, cell_gid, region_id):
+        """
+        Get 'spike'-GID for subcellular region on cell.
+        """
+        return self.cell_spkgid_values[cell_gid][region_id]
+
+
+    def cell_has_multiple_sources(self, cell_gid):
+        """
+        Check whether cell associated with this gid has multiple sources and therefore
+        multiple gids.
+        """
+        return (cell_gid in self.cell_spkgid_values)
+
+
 # --- For implementation of access to individual neurons' parameters -----------
 
 
@@ -320,27 +397,33 @@ class ID(int, common.IDMixin):
         `cell_parameters` -- a ParameterSpace containing the parameters used to
                              initialise the cell model.
         """
-        gid = int(self)
+        cell_gid = int(self)
         if getattr(cell_model, 'multicompartment', False):
             # registration of multicompartmental cell
-            cell_parameters['owning_gid'] = gid
+            cell_parameters['owning_gid'] = cell_gid
             self._cell = cell_model(**cell_parameters)
 
-            # register gid for each source section
+            # register gid for each subcellular source section
+            unregistered_regions = sorted([
+                reg for (reg, gid) in self._cell.region_to_gid.items() if gid is None
+            ])
+            region_to_gid = state.make_spkgids(cell_gid, unregistered_regions)
+            self._cell.region_to_gid.update(region_to_gid)
+
             for region, source_gid in self._cell.region_to_gid.items():
-                source_ref = self._cell.gid_to_source[source_gid]
-                source_sec = self._cell.gid_to_section[source_gid]
+                source_ref = self._cell.region_to_source[region]
+                source_sec = self._cell.region_to_section[region]
                 state.register_gid(source_gid, source_ref, section=source_sec)
-                # Threshold is region-dependent
+                # Threshold is specific to subcellular region
                 state.parallel_context.threshold(source_gid, self._cell.get_threshold(region))
 
         else:
             # default cell registration
             self._cell = cell_model(**cell_parameters)          # create the cell object
-            state.register_gid(gid, self._cell.source, section=self._cell.source_section)
+            state.register_gid(cell_gid, self._cell.source, section=self._cell.source_section)
         
             if hasattr(self._cell, "get_threshold"):            # this is not adequate, since the threshold may be changed after cell creation
-                state.parallel_context.threshold(gid, self._cell.get_threshold())  # the problem is that self._cell does not know its own gid
+                state.parallel_context.threshold(cell_gid, self._cell.get_threshold())  # the problem is that self._cell does not know its own gid
 
     def get_initial_value(self, variable):
         """Get the initial value of a state variable of the cell."""
