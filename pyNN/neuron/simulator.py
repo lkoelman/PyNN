@@ -35,7 +35,7 @@ from operator import itemgetter
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
 
-logger = logging.getLogger("PyNN")
+logger = logging.getLogger("PyNN.simulator")
 name = "NEURON"  # for use in annotating output data
 
 # Instead of starting the projection var-GID range from 0, the first _MIN_PROJECTION_VARGID are 
@@ -364,7 +364,20 @@ class _State(common.control.BaseState):
         """
         Get 'spike'-GID for subcellular region on cell.
         """
+        if region_id == 'soma':
+            return cell_gid
         return self.cell_spkgid_values[cell_gid][region_id]
+
+
+    def get_spkgids(self, cell_gid, as_dict=False):
+        """
+        Get 'spike'-GIDs for all subcellular regions on cell.
+        """
+        region_gids = self.cell_spkgid_values.get(cell_gid, {})
+        if as_dict:
+            return region_gids
+        else:
+            return region_gids.values()
 
 
     def cell_has_multiple_sources(self, cell_gid):
